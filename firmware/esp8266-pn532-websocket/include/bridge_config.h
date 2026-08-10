@@ -37,6 +37,20 @@ constexpr uint32_t DISCOVERY_REMOVAL_CONFIRM_MS = 750;
 constexpr uint32_t DISCOVERY_RETRY_DELAY_MS = 500;
 constexpr uint8_t DISCOVERY_FAILURE_LIMIT = 3;
 
+#if defined(ARDUINO_ARCH_ESP32)
+// PN532 uses UART2 on ESP32, leaving UART0/USB free for SERIAL_DIAGNOSTICS
+// without disconnecting the reader. GPIO4/13/14/25 avoid the ESP32 strapping
+// pins (0, 2, 5, 12, 15) and the input-only pins (34-39).
+constexpr uint8_t PN532_RX_PIN = 16;    // UART2 RX, wired to PN532 TX/SDA.
+constexpr uint8_t PN532_TX_PIN = 17;    // UART2 TX, wired to PN532 RX/SCL.
+constexpr uint8_t STATUS_LED_PIN = 4;   // External LED, active high.
+constexpr uint8_t BUTTON_PIN = 13;      // Button to GND, pull-up.
+// No ESP32-WROOM-32 devkit built-in LED is standardized across vendors, so
+// the network LED is a second external LED rather than LED_BUILTIN.
+constexpr uint8_t NETWORK_LED_PIN = 25; // External LED, active high.
+// Connect only to the PN532 RSTPD_N input (active low), never RSTOUT_N.
+constexpr uint8_t PN532_RESET_PIN = 14;
+#else
 // D1/D2/D5 are safe general-purpose pins now that PN532 uses hardware UART.
 // Avoid the old D3/D4 wiring: GPIO0/GPIO2 determine ESP8266 boot mode.
 constexpr uint8_t STATUS_LED_PIN = D1;  // GPIO5, external LED, active high.
@@ -46,5 +60,6 @@ constexpr uint8_t BUTTON_PIN = D2;      // GPIO4, button to GND, pull-up.
 constexpr uint8_t NETWORK_LED_PIN = LED_BUILTIN;
 // Connect only to the PN532 RSTPD_N input (active low), never RSTOUT_N.
 constexpr uint8_t PN532_RESET_PIN = D5; // GPIO14.
+#endif
 
 constexpr char FIRMWARE_VERSION[] = "3.3.3";

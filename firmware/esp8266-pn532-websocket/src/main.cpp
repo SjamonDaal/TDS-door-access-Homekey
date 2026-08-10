@@ -1,9 +1,26 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#if defined(ARDUINO_ARCH_ESP32)
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <WiFi.h>
+#include <mbedtls/md.h>
+// ESP32's global HTTPUpdate instance is lowercase `httpUpdate`, unlike the
+// ESP8266 core's `ESPhttpUpdate`; both expose the same API otherwise.
+#define FirmwareUpdate httpUpdate
+// PN532 gets its own hardware UART on ESP32, leaving UART0/USB (Serial) free
+// for SERIAL_DIAGNOSTICS without disconnecting the reader.
+#define PN532_SERIAL Serial2
+#else
 #include <Crypto.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266httpUpdate.h>
 #include <ESP8266WiFi.h>
+#define FirmwareUpdate ESPhttpUpdate
+// ESP8266 has one usable hardware UART, shared with the USB serial monitor;
+// SERIAL_DIAGNOSTICS builds require the PN532 TX/RX to be disconnected.
+#define PN532_SERIAL Serial
+#endif
 #include <WebSocketsClient.h>
 
 #include "bridge_config.h"
@@ -133,8 +150,8 @@ static bool ringPop(uint8_t& value) {
 }
 
 static void drainPn532Uart() {
-  while (Serial.available()) {
-    const uint8_t value = static_cast<uint8_t>(Serial.read());
+  while (PN532_SERIAL.available()) {
+    const uint8_t value = static_cast<uint8_t>(PN532_SERIAL.read());
     if (waitingForPn532Response) {
       ringPush(value);
     }
@@ -143,8 +160,8 @@ static void drainPn532Uart() {
 
 static void clearPn532Input() {
   ringClear();
-  while (Serial.available()) {
-    Serial.read();
+  while (PN532_SERIAL.available()) {
+    PN532_SERIAL.read();
   }
 }
 
@@ -177,8 +194,8 @@ static bool readByteUntil(uint8_t& value, uint32_t deadline) {
     if (ringPop(value)) {
       return true;
     }
-    if (Serial.available()) {
-      value = static_cast<uint8_t>(Serial.read());
+    if (PN532_SERIAL.available()) {
+      value = static_cast<uint8_t>(PN532_SERIAL.read());
       return true;
     }
     yield();
@@ -328,8 +345,8 @@ static bool executeLocalPn532Command(
   protocolBuffer[frameLength++] = 0x00;
 
   clearPn532Input();
-  Serial.write(protocolBuffer, frameLength);
-  Serial.flush();
+  PN532_SERIAL.write(protocolBuffer, frameLength);
+  PN532_SERIAL.flush();
 
   size_t acknowledgementLength = 0;
   if (!readPn532Frame(
@@ -422,8 +439,8 @@ static void handleExecute(const ProtocolMessage& message) {
   }
 
   clearPn532Input();
-  Serial.write(message.payload, message.payloadLength);
-  Serial.flush();
+  PN532_SERIAL.write(message.payload, message.payloadLength);
+  PN532_SERIAL.flush();
 
   size_t frameLength = 0;
   ErrorCode error = ErrorCode::PN532_TIMEOUT;
@@ -784,8 +801,8 @@ static bool beginAsyncPn532Command(
       max<uint16_t>(responseTimeoutMs, 50);
   asyncPn532.deadline = millis() + 250;
   resetAsyncFrameCollector();
-  Serial.write(protocolBuffer, frameLength);
-  Serial.flush();
+  PN532_SERIAL.write(protocolBuffer, frameLength);
+  PN532_SERIAL.flush();
   return true;
 }
 
@@ -807,8 +824,8 @@ static AsyncCommandResult pollAsyncPn532Command(
       static const uint8_t ACK[] = {
           0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00
       };
-      Serial.write(ACK, sizeof(ACK));
-      Serial.flush();
+      PN532_SERIAL.write(ACK, sizeof(ACK));
+      PN532_SERIAL.flush();
       asyncPn532.active = false;
       clearPn532Input();
     }
@@ -1249,6 +1266,22 @@ static String normalizedMacAddress() {
 }
 
 static String deriveReaderToken() {
+#if defined(ARDUINO_ARCH_ESP32)
+  uint8_t digest[32];
+  mbedtls_md_hmac(
+      mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+      reinterpret_cast<const uint8_t*>(FLEET_SECRET),
+      strlen(FLEET_SECRET),
+      reinterpret_cast<const uint8_t*>(readerId.c_str()),
+      readerId.length(),
+      digest
+  );
+  char hex[sizeof(digest) * 2 + 1];
+  for (size_t i = 0; i < sizeof(digest); i++) {
+    snprintf(hex + i * 2, 3, "%02x", digest[i]);
+  }
+  return String(hex);
+#else
   String token = experimental::crypto::SHA256::hmac(
       readerId,
       FLEET_SECRET,
@@ -1257,6 +1290,7 @@ static String deriveReaderToken() {
   );
   token.toLowerCase();
   return token;
+#endif
 }
 
 static void sendHello() {
@@ -1412,16 +1446,27 @@ static void startOtaIfNeeded() {
   ArduinoOTA.onError([](ota_error_t) {
     otaInProgress = false;
   });
+#if defined(ARDUINO_ARCH_ESP32)
+  // arduino-esp32's ArduinoOTA::begin() takes no arguments; mDNS is always
+  // advertised.
+  ArduinoOTA.begin();
+#else
   ArduinoOTA.begin(true);
+#endif
   otaStarted = true;
 }
 
 static void configureHttpUpdates() {
-  ESPhttpUpdate.rebootOnUpdate(true);
-  ESPhttpUpdate.closeConnectionsOnUpdate(true);
-  ESPhttpUpdate.setClientTimeout(5000);
-  ESPhttpUpdate.setAuthorization(readerId, readerToken);
-  ESPhttpUpdate.onStart([]() {
+  FirmwareUpdate.rebootOnUpdate(true);
+#if !defined(ARDUINO_ARCH_ESP32)
+  // ESP32's HTTPUpdate class exposes neither of these; ESP32 instead sends
+  // Basic auth per request via the update() call's requestCB (see
+  // checkForFirmwareUpdate) and accepts the class's default client timeout.
+  FirmwareUpdate.closeConnectionsOnUpdate(true);
+  FirmwareUpdate.setClientTimeout(5000);
+  FirmwareUpdate.setAuthorization(readerId, readerToken);
+#endif
+  FirmwareUpdate.onStart([]() {
     otaInProgress = true;
     websocketConnected = false;
     cancelAsyncTransceive();
@@ -1429,10 +1474,10 @@ static void configureHttpUpdates() {
     clearPn532Input();
     webSocket.disconnect();
   });
-  ESPhttpUpdate.onEnd([]() {
+  FirmwareUpdate.onEnd([]() {
     setStatusLed(false);
   });
-  ESPhttpUpdate.onError([](int) {
+  FirmwareUpdate.onError([](int) {
     otaInProgress = false;
   });
 }
@@ -1450,13 +1495,26 @@ static void checkForFirmwareUpdate() {
   // A normal 304 check must not interrupt reader service. The updater's
   // onStart callback disconnects only when a real image will be installed.
   WiFiClient client;
-  const HTTPUpdateResult result = ESPhttpUpdate.update(
+#if defined(ARDUINO_ARCH_ESP32)
+  const HTTPUpdateResult result = FirmwareUpdate.update(
+      client,
+      BACKEND_HOST,
+      FIRMWARE_API_PORT,
+      FIRMWARE_UPDATE_PATH,
+      FIRMWARE_VERSION,
+      [](HTTPClient* http) {
+        http->setAuthorization(readerId.c_str(), readerToken.c_str());
+      }
+  );
+#else
+  const HTTPUpdateResult result = FirmwareUpdate.update(
       client,
       BACKEND_HOST,
       FIRMWARE_API_PORT,
       FIRMWARE_UPDATE_PATH,
       FIRMWARE_VERSION
   );
+#endif
   if (result == HTTP_UPDATE_FAILED && requested) {
     lastAccessGranted = false;
     accessFeedbackUntil = millis() + BUTTON_FAILURE_DURATION_MS;
@@ -1524,8 +1582,12 @@ static void setStatusLed(bool on) {
 }
 
 static void setNetworkLed(bool on) {
+#if defined(ARDUINO_ARCH_ESP32)
+  digitalWrite(NETWORK_LED_PIN, on ? HIGH : LOW);
+#else
   // The NodeMCU built-in LED is active low.
   digitalWrite(NETWORK_LED_PIN, on ? LOW : HIGH);
+#endif
 }
 
 static void updateNetworkLed() {
@@ -1582,9 +1644,14 @@ static void updateStatusLed() {
 }
 
 void setup() {
+#if defined(ARDUINO_ARCH_ESP32)
+  // Set the off level (active-high LED, so LOW) before enabling output.
+  digitalWrite(NETWORK_LED_PIN, LOW);
+#else
   // GPIO2/D4 is a boot strap pin. Keep it high while changing it to output;
   // the on-board LED is therefore off until firmware is fully running.
   digitalWrite(NETWORK_LED_PIN, HIGH);
+#endif
   pinMode(NETWORK_LED_PIN, OUTPUT);
   setNetworkLed(false);
   pinMode(STATUS_LED_PIN, OUTPUT);
@@ -1597,21 +1664,35 @@ void setup() {
   buttonRawPressed = digitalRead(BUTTON_PIN) == LOW;
   buttonStablePressed = buttonRawPressed;
 
-  Serial.setRxBufferSize(PN532_RING_SIZE);
-  Serial.begin(PN532_BAUD_RATE, SERIAL_8N1);
-  Serial.setTimeout(2);
+  PN532_SERIAL.setRxBufferSize(PN532_RING_SIZE);
+#if defined(ARDUINO_ARCH_ESP32)
+  PN532_SERIAL.begin(
+      PN532_BAUD_RATE, SERIAL_8N1, PN532_RX_PIN, PN532_TX_PIN
+  );
+#else
+  PN532_SERIAL.begin(PN532_BAUD_RATE, SERIAL_8N1);
+#endif
+  PN532_SERIAL.setTimeout(2);
   hardwareResetPn532();
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+#if defined(ARDUINO_ARCH_ESP32)
+  WiFi.setSleep(false);
+#else
   WiFi.setSleepMode(WIFI_NONE_SLEEP);
+#endif
   WiFi.setAutoReconnect(true);
 
   readerId = normalizedMacAddress();
   readerToken = deriveReaderToken();
   deviceHostname = "TDS-Door-Access-V2-" + readerId;
   configureHttpUpdates();
+#if defined(ARDUINO_ARCH_ESP32)
+  WiFi.setHostname(deviceHostname.c_str());
+#else
   WiFi.hostname(deviceHostname);
+#endif
   connectWifiIfNeeded();
 
   webSocket.begin(BACKEND_HOST, BACKEND_PORT, BACKEND_PATH);
@@ -1655,7 +1736,10 @@ void loop() {
   checkFirmwareUpdateIfDue();
 
 #if SERIAL_DIAGNOSTICS
-  // Diagnostic builds should be used with PN532 TX/RX disconnected.
+  // ESP8266: PN532 and this diagnostic output share the sole hardware UART,
+  // so PN532 TX/RX must be disconnected while using this build. ESP32: PN532
+  // uses a dedicated UART2, so this output is available over USB (UART0)
+  // with the reader connected as normal.
   static uint32_t lastStatusAt = 0;
   if (millis() - lastStatusAt >= 2000) {
     lastStatusAt = millis();

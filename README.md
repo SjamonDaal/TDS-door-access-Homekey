@@ -1,13 +1,14 @@
 # TDS Door Access V2
 
 TDS Door Access V2 is a central Apple Home Key and 13.56 MHz RFID access
-controller for ESP8266/NodeMCU door readers with PN532 NFC hardware.
+controller for ESP8266/NodeMCU or ESP32-WROOM-32 door readers with PN532 NFC
+hardware.
 
 One controller owns the Home Key identity, encrypted credential store and
-access policy integration. Up to ten NodeMCU readers can share that identity
-while retaining individual MAC-based reader IDs. HomeKit is used to provision
-Wallet credentials; the displayed HomeKit lock does not directly operate a
-door.
+access policy integration. Up to ten readers, of either board type, can
+share that identity while retaining individual MAC-based reader IDs. HomeKit
+is used to provision Wallet credentials; the displayed HomeKit lock does not
+directly operate a door.
 
 > This is an independent, unofficial implementation. It is not affiliated
 > with or endorsed by Apple. Deploy access-control equipment only after
@@ -36,7 +37,7 @@ iPhone / Apple Watch / RFID tag
                |
          UART (3.3 V)
                |
-        ESP8266 NodeMCU
+   ESP8266 NodeMCU / ESP32-WROOM-32
                |
  authenticated WebSocket
                |
@@ -45,18 +46,24 @@ iPhone / Apple Watch / RFID tag
        SQLite   HomeKit   Access/button APIs
 ```
 
-The ESP8266 transports PN532 commands and provides local I/O. It does not
+The reader transports PN532 commands and provides local I/O. It does not
 contain Home Key private keys, user mappings or access policy.
 
 ## Hardware
 
-- NodeMCU v2 or compatible ESP8266 board
+Readers can be built on either an ESP8266 (NodeMCU v2) or an ESP32-WROOM-32
+board; both run the same WebSocket protocol and can be mixed in one fleet.
+Controller-managed OTA updates currently only cover the ESP8266 `websocket`
+build — see [Controller-managed firmware updates](#controller-managed-firmware-updates).
+
+- NodeMCU v2 (ESP8266) or ESP32-WROOM-32 devkit
 - PN532 configured for HSU/UART mode
 - Stable supply appropriate for the PN532 carrier board
 - Optional momentary button
-- Optional LED with a 220–1000 ohm resistor
+- Optional LED with a 220–1000 ohm resistor (ESP32 needs a second LED; see
+  below)
 
-### PN532
+### PN532 (ESP8266 / NodeMCU)
 
 | PN532 | NodeMCU |
 |---|---|
@@ -67,7 +74,7 @@ contain Home Key private keys, user mappings or access policy.
 
 The ESP8266 UART is 3.3 V logic. Do not apply 5 V UART signals.
 
-### Button and LED
+### Button and LED (ESP8266 / NodeMCU)
 
 | Function | NodeMCU | Wiring |
 |---|---|---|
@@ -83,6 +90,29 @@ without cycling power. If the carrier does not expose `RSTPD_N`, leave D5
 unconnected; switching PN532 power requires a proper transistor or load
 switch, not direct GPIO power.
 
+### PN532, button and LED (ESP32-WROOM-32)
+
+The ESP32 build dedicates hardware UART2 to the PN532, leaving UART0 (the
+USB serial connection) free — `SERIAL_DIAGNOSTICS` builds work with the PN532
+still connected, unlike on ESP8266.
+
+| Function | ESP32 | Wiring |
+|---|---|---|
+| PN532 `TX` (often `SDA`) | `GPIO16` (UART2 RX) | Direct |
+| PN532 `RX` (often `SCL`) | `GPIO17` (UART2 TX) | Direct |
+| Status LED | `GPIO4` | `GPIO4 -> resistor -> LED -> GND` |
+| Network LED | `GPIO25` | `GPIO25 -> resistor -> LED -> GND` |
+| Button | `GPIO13` | Momentary button between `GPIO13` and `GND` |
+| PN532 reset | `GPIO14` | `GPIO14 -> RSTPD_N` |
+
+The ESP32 UART is 3.3 V logic; do not apply 5 V UART signals. GPIO4/13/14/25
+avoid the ESP32 strapping pins (0, 2, 5, 12, 15) and the input-only pins
+(34–39), so they are safe to hold low or high during boot. Connect the reset
+pin only to the PN532's active-low `RSTPD_N` input, never `RSTOUT_N`. Unlike
+the ESP8266 build, the network LED is a second external LED rather than a
+board LED, since no built-in LED pin is standardized across ESP32-WROOM-32
+devkit vendors.
+
 ## Repository layout
 
 ```text
@@ -90,7 +120,7 @@ backend/                         Python controller
 backend/homekey_controller/      Storage, registration, APIs and orchestration
 backend/homekey_bridge/          WebSocket PN532 protocol
 backend/vendor/                  Apache-licensed Home Key protocol core
-firmware/esp8266-pn532-websocket Current fleet firmware
+firmware/esp8266-pn532-websocket Current fleet firmware (ESP8266 + ESP32)
 firmware/esp8266-pn532-bridge    Legacy TCP prototype
 docs/                            Detailed operating documentation
 tests/                           Controller and transport tests
@@ -135,15 +165,18 @@ chmod 600 include/secrets.h
 ```
 
 Set the 2.4 GHz Wi-Fi credentials, fleet secret and `BACKEND_HOST` in
-`include/secrets.h`.
+`include/secrets.h`. The same `secrets.h` and `bridge_config.h` are shared by
+both board targets.
 
-Build:
+Build for ESP8266 (NodeMCU):
 
 ```bash
 pio run -e websocket
 ```
 
-For the first installation, disconnect PN532 RX/TX and flash over USB:
+For the first installation, disconnect PN532 RX/TX and flash over USB, since
+the ESP8266 build's sole UART is shared between the PN532 and the USB serial
+connection:
 
 ```bash
 pio run -e websocket --target upload \
@@ -151,6 +184,21 @@ pio run -e websocket --target upload \
 ```
 
 Reconnect RX/TX and reset the board.
+
+Build for ESP32-WROOM-32 instead:
+
+```bash
+pio run -e esp32
+```
+
+```bash
+pio run -e esp32 --target upload \
+  --upload-port /dev/cu.usbserial-10
+```
+
+The ESP32 build's PN532 UART (UART2) is independent from the USB serial
+connection (UART0), so there is no need to disconnect PN532 RX/TX before
+flashing over USB.
 
 ### 3. Connect the reader
 
@@ -210,6 +258,12 @@ Any HTTP 2xx response is accepted. JSON may explicitly provide `success` or
 
 Firmware 2.4 and later check the authenticated controller endpoint at startup,
 every six hours and whenever the controller requests an immediate check.
+
+This pipeline currently manages one binary for the whole fleet and validates
+it as an ESP8266 image (`publish-firmware` rejects anything not starting with
+the ESP8266 image magic byte). ESP32 readers are not part of this rollout:
+update them manually over USB or `pio run -e esp32_ota` (Arduino OTA) with
+each release.
 
 For normal deployments, build, publish, restart, roll out, and verify every
 configured reader with one command:
@@ -337,6 +391,7 @@ PYTHONPATH=backend backend/.venv/bin/python \
   -m unittest discover -s tests/websocket -p 'test_*.py'
 
 pio run -d firmware/esp8266-pn532-websocket -e websocket
+pio run -d firmware/esp8266-pn532-websocket -e esp32
 ```
 
 ## Security scope

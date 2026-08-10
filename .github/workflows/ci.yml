@@ -48,3 +48,11 @@ jobs:
         env:
           HOMEKEY_OTA_AUTH: ci-build-token
         run: pio run -e ota
+      - name: Build ESP32 firmware
+        run: pio run -e esp32
+      - name: Build ESP32 diagnostic firmware
+        run: pio run -e esp32_diagnostic
+      - name: Build ESP32 ArduinoOTA firmware
+        env:
+          HOMEKEY_OTA_AUTH: ci-build-token
+        run: pio run -e esp32_ota
