@@ -1,7 +1,7 @@
 # TDS Door Access V2
 
 TDS Door Access V2 is a central Apple Home Key and 13.56 MHz RFID access
-controller for ESP8266/NodeMCU or ESP32-WROOM-32 door readers with PN532 NFC
+controller for ESP8266/NodeMCU or ESP32 door readers with PN532 NFC
 hardware.
 
 One controller owns the Home Key identity, encrypted credential store and
@@ -37,7 +37,7 @@ iPhone / Apple Watch / RFID tag
                |
          UART (3.3 V)
                |
-   ESP8266 NodeMCU / ESP32-WROOM-32
+      ESP8266 NodeMCU / ESP32
                |
  authenticated WebSocket
                |
@@ -51,12 +51,23 @@ contain Home Key private keys, user mappings or access policy.
 
 ## Hardware
 
-Readers can be built on either an ESP8266 (NodeMCU v2) or an ESP32-WROOM-32
-board; both run the same WebSocket protocol and can be mixed in one fleet.
+Readers can be built on either an ESP8266 (NodeMCU v2) or an ESP32 board;
+both run the same WebSocket protocol and can be mixed in one fleet.
 Controller-managed OTA updates currently only cover the ESP8266 `websocket`
 build — see [Controller-managed firmware updates](#controller-managed-firmware-updates).
 
-- NodeMCU v2 (ESP8266) or ESP32-WROOM-32 devkit
+"ESP32" here means specifically the classic/original ESP32 chip (Xtensa
+dual-core, e.g. ESP32-D0WD) as found on ESP32-WROOM-32, WROOM-32D/32U and
+WROVER modules — those are all the same chip with different flash/PSRAM
+packaging. It does **not** cover the newer ESP32-S2, S3, C3, C6 or H2
+variants: those have different pinouts and strapping pins, a different
+bootloader flash offset than `scripts/esp32_merge_bin.py` assumes, and (for
+C3/C6/H2) a RISC-V rather than Xtensa core. The `platformio.ini` `esp32`
+environment targets `board = esp32dev` specifically for this reason; using
+this firmware on those other variants would need a new environment, a
+reworked pin table, and checking the bootloader offset, not just a rebuild.
+
+- NodeMCU v2 (ESP8266) or ESP32 devkit
 - PN532 configured for HSU/UART mode
 - Stable supply appropriate for the PN532 carrier board
 - Optional momentary button
@@ -90,7 +101,7 @@ without cycling power. If the carrier does not expose `RSTPD_N`, leave D5
 unconnected; switching PN532 power requires a proper transistor or load
 switch, not direct GPIO power.
 
-### PN532, button and LED (ESP32-WROOM-32)
+### PN532, button and LED (ESP32)
 
 The ESP32 build dedicates hardware UART2 to the PN532, leaving UART0 (the
 USB serial connection) free — `SERIAL_DIAGNOSTICS` builds work with the PN532
@@ -110,7 +121,7 @@ avoid the ESP32 strapping pins (0, 2, 5, 12, 15) and the input-only pins
 (34–39), so they are safe to hold low or high during boot. Connect the reset
 pin only to the PN532's active-low `RSTPD_N` input, never `RSTOUT_N`. Unlike
 the ESP8266 build, the network LED is a second external LED rather than a
-board LED, since no built-in LED pin is standardized across ESP32-WROOM-32
+board LED, since no built-in LED pin is standardized across ESP32
 devkit vendors.
 
 ## Repository layout
@@ -185,7 +196,7 @@ pio run -e websocket --target upload \
 
 Reconnect RX/TX and reset the board.
 
-Build for ESP32-WROOM-32 instead:
+Build for ESP32 instead:
 
 ```bash
 pio run -e esp32
