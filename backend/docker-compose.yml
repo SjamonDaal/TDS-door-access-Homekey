@@ -1,0 +1,36 @@
+# Production deployment for the controller.
+#
+# Targets native Linux: network_mode: host is required for HomeKit's
+# mDNS/Bonjour advertisement to reach the real LAN (see docs/PORTS.md and
+# the README's "Running the controller in Docker" section). On macOS/Windows
+# this does NOT work regardless — Docker Desktop runs containers in a VM
+# where "host" networking only reaches that VM, not your actual network.
+# Comment out network_mode below and uncomment the ports block instead for a
+# readers/firmware-only setup without HomeKit pairing.
+#
+# Only backend/config/ is mounted — application code is baked into the image
+# (see Dockerfile), so `docker compose up -d --build` is required to pick up
+# code changes; config/secrets changes just need a restart.
+services:
+  controller:
+    build: .
+    image: tds-door-access-controller
+    container_name: tds-door-access-controller
+    restart: unless-stopped
+    network_mode: host
+    # ports:
+    #   - "8765:8765"
+    #   - "8766:8766"
+    #   - "51926:51926"
+    volumes:
+      - ./config:/app/config
+    healthcheck:
+      # No curl/wget in the image on purpose (see Dockerfile); stdlib only.
+      test: [
+        "CMD", "python3", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8766/health', timeout=3)"
+      ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

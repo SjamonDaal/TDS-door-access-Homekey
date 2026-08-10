@@ -250,6 +250,50 @@ PYTHONPATH=backend backend/.venv/bin/python backend/run_controller.py
 Add the displayed HomeKit accessory to Apple Home. HomeKit registration adds
 Wallet endpoint public keys to the encrypted controller store.
 
+#### Running the controller in Docker
+
+`backend/Dockerfile` builds a self-contained production image (application
+code baked in; only `backend/config/` is mounted at run time, so secrets,
+the SQLite store, the encryption key and `homekit.state` all live on the
+host and survive container restarts/rebuilds). `backend/docker-compose.yml`
+is the standard way to run it:
+
+```bash
+cd backend
+cp config/controller.example.json config/controller.json
+cp config/readers.example.json config/readers.json
+chmod 600 config/controller.json config/readers.json
+docker compose up -d --build
+docker compose logs -f
+```
+
+Because code is baked into the image, picking up a code change (not a
+config change) requires rebuilding: `docker compose up -d --build`. A config
+change alone just needs `docker compose restart`.
+
+Without Compose, the equivalent plain Docker commands are:
+
+```bash
+docker build -t tds-door-access-controller backend
+docker run -d --name tds-door-access-controller --restart unless-stopped \
+  --network host \
+  -v "$(pwd)/backend/config:/app/config" \
+  tds-door-access-controller
+```
+
+**On Linux**, `--network host` (the default in `docker-compose.yml`) shares
+the container's network stack with the host, so HomeKit's mDNS/Bonjour
+advertisement reaches the LAN normally — full support, including HomeKit
+pairing.
+
+**On macOS/Windows**, Docker Desktop runs containers inside a VM. Even
+`--network host` there only reaches that VM, not your actual network, so
+mDNS multicast never reaches real devices on the LAN. Comment out
+`network_mode: host` in `docker-compose.yml` and uncomment its `ports:`
+block instead — enough for readers to connect and pull firmware updates, but
+HomeKit pairing will not discover the accessory. Run the controller natively
+(as above) on macOS/Windows when you need HomeKit pairing.
+
 ## Access API
 
 Configure `access_api.url` in `backend/config/controller.json`. Authenticated

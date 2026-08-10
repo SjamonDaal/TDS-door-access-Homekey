@@ -1,0 +1,10 @@
+# Always supplied via a volume at run time (secrets, DB, encryption key,
+# HomeKit state) — must never be baked into an image layer. Excluding the
+# whole directory rather than naming individual files, since runtime state
+# such as *.sqlite3-wal/-shm or firmware/manifest.json would otherwise slip
+# through a per-file list.
+config/
+
+.venv/
+__pycache__/
+*.pyc
