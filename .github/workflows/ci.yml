@@ -37,7 +37,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install PlatformIO
-        run: python -m pip install platformio
+        # esptool (bundled by the espressif32 platform package) needs these
+        # at run time for the ESP32 bootloader/partition build step; without
+        # them it fails with "ModuleNotFoundError: No module named
+        # 'intelhex'" (same fix as backend/Dockerfile's build image).
+        run: python -m pip install platformio esptool
       - name: Create CI-only secrets file
         run: cp include/secrets.example.h include/secrets.h
       - name: Build standard firmware
