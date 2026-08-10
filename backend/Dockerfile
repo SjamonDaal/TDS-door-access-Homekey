@@ -22,8 +22,13 @@ COPY requirements.txt /tmp/requirements.txt
 ENV PIP_PROGRESS_BAR=off
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Runs as an unprivileged user rather than the image default (root).
-RUN useradd --system --create-home --home-dir /app --shell /usr/sbin/nologin controller
+# Runs as an unprivileged user rather than the image default (root). UID/GID
+# are pinned (rather than left to useradd's next-free-system-UID default) so
+# `chown` on the host-side config/ bind mount (see README) targets a stable,
+# known value across rebuilds instead of whatever happened to be free.
+RUN groupadd --system --gid 1000 controller \
+    && useradd --system --uid 1000 --gid 1000 --create-home \
+       --home-dir /app --shell /usr/sbin/nologin controller
 
 WORKDIR /app
 COPY --chown=controller:controller . .

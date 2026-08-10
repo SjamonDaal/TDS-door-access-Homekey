@@ -274,9 +274,18 @@ cd backend
 cp config/controller.example.json config/controller.json
 cp config/readers.example.json config/readers.json
 chmod 600 config/controller.json config/readers.json
+chown -R 1000:1000 config
 docker compose up -d --build
 docker compose logs -f
 ```
+
+The container runs as an unprivileged user, UID/GID 1000 (see `Dockerfile`);
+`chown -R 1000:1000 config` is required on Linux so that user can actually
+read/write the bind-mounted `config/` directory — without it, expect
+`PermissionError: [Errno 13] Permission denied` reading `controller.json`.
+This step doesn't reproduce as a problem in every environment (some bind
+mount implementations don't enforce host-matching UIDs the way native Linux
+does), but running it is always safe and always correct on Linux.
 
 Because code is baked into the image, picking up a code change (not a
 config change) requires rebuilding: `docker compose up -d --build`. A config
