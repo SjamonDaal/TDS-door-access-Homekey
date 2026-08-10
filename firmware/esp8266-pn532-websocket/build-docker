@@ -1,0 +1,33 @@
+#!/bin/sh
+# Builds firmware inside Docker so flashing a reader is the only step that
+# needs anything installed on the host. Requires Docker; nothing else.
+#
+# Usage:
+#   ./build-docker -e websocket   # ESP8266/NodeMCU
+#   ./build-docker -e esp32       # ESP32-WROOM-32
+#
+# Output lands under .pio/build/<environment>/ as usual:
+#   websocket/firmware.bin        flash at 0x0
+#   esp32/firmware-merged.bin     flash at 0x0 (bootloader+partitions+app)
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGE=tds-door-access-firmware-builder
+CACHE_VOLUME=tds-door-access-pio-cache
+
+if [ ! -f "$SCRIPT_DIR/include/secrets.h" ]; then
+  echo "Missing $SCRIPT_DIR/include/secrets.h" >&2
+  echo "cp include/secrets.example.h include/secrets.h, fill it in, then retry." >&2
+  exit 1
+fi
+
+docker build -q -t "$IMAGE" "$SCRIPT_DIR" >/dev/null
+docker volume create "$CACHE_VOLUME" >/dev/null
+
+docker run --rm \
+  -v "$SCRIPT_DIR:/firmware" \
+  -v "$CACHE_VOLUME:/root/.platformio" \
+  "$IMAGE" \
+  run "$@"
+
+echo "Build output is under $SCRIPT_DIR/.pio/build/<environment>/"

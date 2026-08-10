@@ -200,6 +200,39 @@ The ESP32 build's PN532 UART (UART2) is independent from the USB serial
 connection (UART0), so there is no need to disconnect PN532 RX/TX before
 flashing over USB.
 
+#### Building without installing PlatformIO
+
+`build-docker` runs the same build inside Docker, so a reader machine only
+needs [esptool](https://github.com/espressif/esptool) (`pip install esptool`
+or `pipx install esptool`) rather than PlatformIO and the multi-gigabyte
+ESP8266/ESP32 compiler toolchains. Docker itself is the only prerequisite;
+package downloads are cached in a Docker volume across runs.
+
+```bash
+cd firmware/esp8266-pn532-websocket
+cp include/secrets.example.h include/secrets.h   # as above; edit it first
+./build-docker -e websocket   # or: -e esp32
+```
+
+Docker on macOS/Windows cannot reach a USB-attached reader, so flashing still
+happens on the host, directly with esptool rather than `pio run --target
+upload`:
+
+```bash
+# ESP8266 (websocket): one file, already includes the bootloader.
+esptool.py --chip esp8266 --port /dev/cu.usbserial-10 \
+  write_flash 0x0 .pio/build/websocket/firmware.bin
+
+# ESP32: build-docker also merges the bootloader, partition table and app
+# into one file for the same reason.
+esptool.py --chip esp32 --port /dev/cu.usbserial-10 \
+  write_flash 0x0 .pio/build/esp32/firmware-merged.bin
+```
+
+This only covers the initial USB flash. Controller-managed and Arduino OTA
+updates still need PlatformIO's `-e ota` / `-e esp32_ota` environments (or a
+grown-up CI pipeline) since esptool alone doesn't speak either OTA protocol.
+
 ### 3. Connect the reader
 
 Start the controller and power the newly flashed reader. On its first
